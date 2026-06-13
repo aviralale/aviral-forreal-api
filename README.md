@@ -10,8 +10,10 @@ Django admin.
 - **Django** + **Django REST Framework**
 - **django-filter** — category / tag / search filtering
 - **django-cors-headers** — CORS for the Next.js frontend
-- **Pillow** — cover image uploads
-- SQLite by default; Postgres via `DATABASE_URL` (`dj-database-url`)
+- **Pillow** — cover uploads, re-encoded to **WebP/AVIF** before storage
+- **django-storages + boto3** — media on **Cloudflare R2** in production
+- **whitenoise** — static files under cPanel/Passenger
+- SQLite in dev; **MySQL/MariaDB** in production via `DATABASE_URL` (`dj-database-url`, PyMySQL driver)
 
 ## Getting started
 
@@ -30,13 +32,54 @@ Write and publish posts at <http://localhost:8000/admin/>.
 
 ## Environment
 
-| Variable               | Default                       | Notes                                   |
-| ---------------------- | ----------------------------- | --------------------------------------- |
-| `SECRET_KEY`           | _(required)_                  | Django secret key                       |
-| `DEBUG`                | `False`                       | `True` for local development            |
-| `DATABASE_URL`         | `sqlite:///db.sqlite3`        | Any `dj-database-url` URL               |
-| `ALLOWED_HOSTS`        | `localhost,127.0.0.1`         | Comma-separated                         |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000`       | Comma-separated frontend origins        |
+`.env` ships with a **PRODUCTION** block active and a **DEVELOPMENT** block
+commented at the bottom — to work locally, comment the four production lines
+(`DEBUG`/`DATABASE_URL`/`ALLOWED_HOSTS`/`CORS_ALLOWED_ORIGINS`) and uncomment the
+dev block.
+
+| Variable               | Default                 | Notes                                                       |
+| ---------------------- | ----------------------- | ----------------------------------------------------------- |
+| `SECRET_KEY`           | _(required)_            | Django secret key                                           |
+| `DEBUG`                | `False`                 | `True` for local development                                |
+| `DATABASE_URL`         | `sqlite:///db.sqlite3`  | `mysql://user:pass@host:3306/db?charset=utf8mb4` in prod    |
+| `ALLOWED_HOSTS`        | `localhost,127.0.0.1`   | Comma-separated (a leading `.` matches subdomains)          |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated frontend origins                            |
+| `IMAGE_UPLOAD_FORMAT`  | `webp`                  | `webp` or `avif` — uploads re-encoded before storage        |
+| `IMAGE_UPLOAD_QUALITY` | `80`                    | 1–100                                                       |
+| `R2_*`                 | _(unset)_               | Cloudflare R2 media bucket; used only when `DEBUG=False`    |
+
+Media: in dev, cover images convert to WebP and serve from `/media/`. In
+production they convert and upload to **Cloudflare R2**, served from
+`R2_PUBLIC_DOMAIN`.
+
+## Deploying to cPanel
+
+1. **MySQL** — in cPanel ▸ *MySQL® Databases*, create a database and user and
+   grant the user all privileges. Use **utf8mb4** so emoji store correctly; if
+   the DB isn't already utf8mb4, run in *phpMyAdmin*:
+   ```sql
+   ALTER DATABASE `cpaneluser_dbname`
+     CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+   ```
+2. **Python app** — cPanel ▸ *Setup Python App* ▸ Create: pick the Python
+   version, set the application root to this folder, and the application URL.
+   cPanel makes a virtualenv and detects `passenger_wsgi.py`.
+3. **Env vars** — set them in the app's *Environment variables* UI, or edit the
+   project-root `.env` (the production block is active by default; fill in your
+   `DATABASE_URL`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`).
+4. **Install + migrate** — from the app's virtualenv (cPanel shows the
+   `source …/activate` command, or use its terminal):
+   ```bash
+   pip install -r requirements.txt
+   python manage.py migrate
+   python manage.py collectstatic --noinput
+   python manage.py createsuperuser
+   ```
+5. **Restart** the app from the Setup Python App page after any change.
+
+Static files (admin, DRF browsable API) are served by WhiteNoise — no extra
+web-server config needed. `PyMySQL` is the DB driver (pure-Python, so it
+installs without build tools).
 
 ## API
 
@@ -81,7 +124,8 @@ setting `status` to `published` is what publishes a post.
 - `published_at` is set automatically the first time a post is published.
 - `views` is incremented atomically with an `F()` expression (race-safe).
 - `TIME_ZONE` is `Asia/Kathmandu`.
-- In development, media (cover images) is served from `/media/`.
+- Cover uploads are re-encoded to WebP/AVIF on save; dev serves them from
+  `/media/`, production stores them on Cloudflare R2.
 
 ## Project layout
 
