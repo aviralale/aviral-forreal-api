@@ -2,8 +2,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os, dj_database_url
 
-load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
+# Load .env from the project root no matter the working directory — cPanel's
+# Passenger may start the app from elsewhere. (cPanel-set env vars also work.)
+load_dotenv(BASE_DIR / '.env')
 
 SECRET_KEY = os.environ['SECRET_KEY']
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
@@ -26,6 +28,9 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # Serves collected static files under Passenger (cPanel) with no extra
+    # web-server config; a no-op for requests it doesn't handle.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -48,9 +53,16 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
     'default': dj_database_url.config(
-        default=f'sqlite:///{BASE_DIR}/db.sqlite3'
+        default=f'sqlite:///{BASE_DIR}/db.sqlite3',
+        conn_max_age=600,           # reuse connections (cPanel/Passenger)
+        conn_health_checks=True,
     )
 }
+# Full Unicode incl. emoji on MySQL/MariaDB. The connection talks utf8mb4; the
+# database itself must also default to utf8mb4 (see the cPanel notes in README).
+if 'mysql' in DATABASES['default'].get('ENGINE', ''):
+    DATABASES['default'].setdefault('OPTIONS', {})
+    DATABASES['default']['OPTIONS'].setdefault('charset', 'utf8mb4')
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -142,5 +154,12 @@ else:
             'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
         },
     }
+
+# In production, hash + compress static files and serve them via WhiteNoise
+# (cPanel has no separate static server). Run `collectstatic` on deploy.
+if not DEBUG:
+    STORAGES['staticfiles']['BACKEND'] = (
+        'whitenoise.storage.CompressedManifestStaticFilesStorage'
+    )
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
