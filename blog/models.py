@@ -57,12 +57,31 @@ class Post(models.Model):
         word_count = len(self.body.split())
         return max(1, round(word_count / 200))  # 200 wpm
 
+    def _convert_cover_image(self):
+        """Re-encode a freshly uploaded cover to the configured web format
+        (WebP/AVIF) before it's written to storage. Only touches brand-new
+        uploads — files already in storage (re-saves, e.g. a view bump) carry
+        ``_committed=True`` and are skipped, as are files already converted."""
+        field = self.cover_image
+        if not field or getattr(field, '_committed', True):
+            return
+        if (field.name or '').lower().endswith(('.webp', '.avif')):
+            return
+        from .images import convert_to_web_image
+        try:
+            content, new_name = convert_to_web_image(field)
+        except Exception:
+            return  # unreadable/odd file — keep the original rather than 500
+        # save=False: write to storage now, persist the name via super().save()
+        self.cover_image.save(new_name, content, save=False)
+
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = slugify(self.title)
         self.reading_time = self._compute_reading_time()
         if self.status == 'published' and not self.published_at:
             self.published_at = timezone.now()
+        self._convert_cover_image()
         super().save(*args, **kwargs)
 
     def __str__(self):

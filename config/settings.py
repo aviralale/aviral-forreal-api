@@ -81,4 +81,66 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# --- Media: conversion + storage --------------------------------------------
+# Uploaded images are re-encoded to a compact web format before storage
+# (see blog/images.py). This applies in every environment.
+IMAGE_UPLOAD_FORMAT = os.getenv('IMAGE_UPLOAD_FORMAT', 'webp')  # 'webp' | 'avif'
+IMAGE_UPLOAD_QUALITY = int(os.getenv('IMAGE_UPLOAD_QUALITY', '80'))
+
+# In production (DEBUG off), point media at a Cloudflare R2 bucket
+# (S3-compatible) by setting the R2_* vars. In dev — or with the vars unset —
+# media stays on the local disk and is served from /media, so local uploads
+# never touch the production bucket even when the creds are present.
+R2_BUCKET_NAME = os.getenv('R2_BUCKET_NAME')
+R2_ACCOUNT_ID = os.getenv('R2_ACCOUNT_ID')
+
+if R2_BUCKET_NAME and R2_ACCOUNT_ID and not DEBUG:
+    _r2_options = {
+        'bucket_name': R2_BUCKET_NAME,
+        'access_key': os.environ['R2_ACCESS_KEY_ID'],
+        'secret_key': os.environ['R2_SECRET_ACCESS_KEY'],
+        'endpoint_url': os.getenv(
+            'R2_ENDPOINT_URL',
+            f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com',
+        ),
+        'region_name': 'auto',
+        'default_acl': None,  # R2 ignores ACLs; don't send one
+        'file_overwrite': False,  # unique names, never clobber
+        'signature_version': 's3v4',
+        # Long-lived caching — names are unique, so safe to keep.
+        'object_parameters': {
+            'CacheControl': 'public, max-age=31536000, immutable',
+        },
+    }
+    # Prefer a public host (custom domain or pub-*.r2.dev) serving clean,
+    # unsigned URLs. Until one is set, fall back to signed endpoint URLs so
+    # uploads still work — just set R2_PUBLIC_DOMAIN for production.
+    _r2_public = os.getenv('R2_PUBLIC_DOMAIN')
+    if _r2_public:
+        # Accept either a bare host or a full URL; custom_domain wants the host.
+        _r2_public = _r2_public.split('://', 1)[-1].strip('/')
+        _r2_options['custom_domain'] = _r2_public  # https://<domain>/<key>
+        _r2_options['querystring_auth'] = False
+    else:
+        _r2_options['querystring_auth'] = True
+
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3.S3Storage',
+            'OPTIONS': _r2_options,
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
+else:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'django.core.files.storage.FileSystemStorage',
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
